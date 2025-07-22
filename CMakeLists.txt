@@ -36,7 +36,18 @@ install(
   DIRECTORY hardware/include/
   DESTINATION include/ros2_control_demo_example_1
 )
-
+install(
+  DIRECTORY launch/
+  DESTINATION share/urdf_tutorial
+)
+install(
+  DIRECTORY urdf/
+  DESTINATION share/urdf_tutorial/urdf/
+)
+install(
+  DIRECTORY meshes/
+  DESTINATION share/urdf_tutorial/meshes/
+)
 install(TARGETS ros2_control_demo_example_1
   EXPORT export_ros2_control_demo_example_1
   ARCHIVE DESTINATION lib

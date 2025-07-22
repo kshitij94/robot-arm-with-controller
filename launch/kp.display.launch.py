@@ -60,7 +60,6 @@ def generate_launch_description():
     robot_controllers = PathJoinSubstitution(
         [
             FindPackageShare("urdf_tutorial"),
-            "launch",
             "rrbot_controllers.yaml",
         ]
     )

@@ -118,10 +118,9 @@ hardware_interface::CallbackReturn RRBotSystemPositionOnlyHardware::on_init(
   // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
   hw_start_sec_ = stod(info_.hardware_parameters["example_param_hw_start_duration_sec"]);
   hw_stop_sec_ = stod(info_.hardware_parameters["example_param_hw_stop_duration_sec"]);
-
-    const char* portname = "/dev/ttyUSB0";
-  hw_slowdown_ = RRBotSystemPositionOnlyHardware::openSerialPort(portname);
-  if (hw_slowdown_ < 0) {
+  const char* portname = "/dev/ttyUSB0";
+  arduino_serial_port_ = RRBotSystemPositionOnlyHardware::openSerialPort(portname);
+  if (arduino_serial_port_ < 0) {
       RCLCPP_FATAL(get_logger(), "Failed to open port : %s", portname);
   }
 
@@ -130,6 +129,8 @@ hardware_interface::CallbackReturn RRBotSystemPositionOnlyHardware::on_init(
 
   for (const hardware_interface::ComponentInfo & joint : info_.joints)
   {
+    RCLCPP_INFO(get_logger(), "Processing joint: '%s'", joint.name.c_str());
+
     // RRBotSystemPositionOnly has exactly one state and command interface on each joint
     if (joint.command_interfaces.size() != 1)
     {
@@ -147,6 +148,7 @@ hardware_interface::CallbackReturn RRBotSystemPositionOnlyHardware::on_init(
         hardware_interface::HW_IF_POSITION);
       return hardware_interface::CallbackReturn::ERROR;
     }
+    RCLCPP_INFO(get_logger(), "Joint '%s' has command interface: '%s'", joint.name.c_str(), joint.command_interfaces[0].name.c_str());
   }
 
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -157,7 +159,7 @@ hardware_interface::CallbackReturn RRBotSystemPositionOnlyHardware::on_configure
 {
   // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
   RCLCPP_INFO(get_logger(), "Configuring ...please wait...");
-  if (!configureSerialPort(hw_slowdown_, B9600)) {
+  if (!configureSerialPort(arduino_serial_port_, B9600)) {
       RCLCPP_FATAL(get_logger(), "Failed to configureSerialPort : B9600");
   }
 
@@ -175,6 +177,8 @@ hardware_interface::CallbackReturn RRBotSystemPositionOnlyHardware::on_configure
   }
   for (const auto & [name, descr] : joint_command_interfaces_)
   {
+    RCLCPP_INFO(get_logger(), "inside configure name ");
+
     set_command(name, 0.0);
   }
   RCLCPP_INFO(get_logger(), "Successfully configured!");
@@ -211,7 +215,7 @@ hardware_interface::CallbackReturn RRBotSystemPositionOnlyHardware::on_deactivat
 {
   // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
   RCLCPP_INFO(get_logger(), "Deactivating ...please wait...");
-  RRBotSystemPositionOnlyHardware::closeSerialPort(hw_slowdown_);
+  RRBotSystemPositionOnlyHardware::closeSerialPort(arduino_serial_port_);
 
   for (int i = 0; i < hw_stop_sec_; i++)
   {
@@ -230,34 +234,57 @@ hardware_interface::return_type RRBotSystemPositionOnlyHardware::read(
   const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
   // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
-  std::stringstream ss;
-  ss << "Reading states:";
 
   for (const auto & [name, descr] : joint_state_interfaces_)
   {
     // Simulate RRBot's movement
     auto new_value = get_state(name) + (get_command(name) - get_state(name)) / 100;
     set_state(name, new_value);
-    ss << std::fixed << std::setprecision(2) << std::endl
-       << "\t" << get_state(name) << " for joint '" << name << "'";
   }
-      char buffer[100];
-
-  // END: This part here is for exemplary purposes - Please do not copy to your production code
-    int n = readFromSerialPort(hw_slowdown_, buffer, sizeof(buffer));
+  char buffer[1000];
+  std::stringstream arduino_message;
+  int n = readFromSerialPort(arduino_serial_port_, buffer, sizeof(buffer));
+  while (n != 0) {
     if (n < 0) {
-        std::stringstream ss;
-        ss << "errro while reading from serial port:"
-             << strerror(errno) << endl;
-      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
-    }     else {
-        ss << "Read from serial port: "
-             << std::string(buffer, n) << endl;
+        std::stringstream errorMessage;
+        errorMessage << "errro while reading from serial port:"
+              << strerror(errno) << endl;
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", errorMessage.str().c_str());
+    } else {
+        arduino_message << std::string(buffer, n);
     }
-
-      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
-
+    std::memset(buffer, 0, sizeof(buffer));
+    n = readFromSerialPort(arduino_serial_port_, buffer, sizeof(buffer));
+  }
+  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", arduino_message.str().c_str());
   return hardware_interface::return_type::OK;
+}
+
+std::string RRBotSystemPositionOnlyHardware::extractJointNumber(const std::string& inputString) {
+    // Define the prefixes and suffixes to look for
+    const std::string prefix = "joint";
+    const std::string suffix = "/position";
+
+    // Find the position where the prefix ends
+    size_t prefixEndPos = inputString.find(prefix) + prefix.length();
+
+    // Find the position where the suffix begins
+    size_t suffixStartPos = inputString.find(suffix, prefixEndPos);
+
+    // Extract the substring that represents the number
+    return inputString.substr(prefixEndPos, suffixStartPos - prefixEndPos);
+}
+
+bool  RRBotSystemPositionOnlyHardware::shouldProcess(std::string jointId, int degree){
+  if (last_joint_command_to_arduino_.count(jointId) == 0) {
+    last_joint_command_to_arduino_[jointId]=degree;
+    return true;
+  }
+  if (last_joint_command_to_arduino_[jointId] == degree) {
+    return false;
+  }
+  last_joint_command_to_arduino_[jointId]=degree;  
+  return true;
 }
 
 hardware_interface::return_type RRBotSystemPositionOnlyHardware::write(
@@ -265,37 +292,30 @@ hardware_interface::return_type RRBotSystemPositionOnlyHardware::write(
 {
   // BEGIN: This part here is for exemplary purposes - Please do not copy to your production code
 
-  if (hw_slowdown_ < 0) {
+  if (arduino_serial_port_ < 0) {
       return hardware_interface::return_type::OK;
   }
-  for (const auto & [name, descr] : joint_command_interfaces_)
-  {
     std::stringstream ss;
-    ss << "Writing commands:";
+    ss << "Writing commands123:  " << endl;
+
+  for (const auto & [name, descr] : joint_command_interfaces_){
+    std::string jointId = RRBotSystemPositionOnlyHardware::extractJointNumber(name);
+    ss <<"Processing joint " << jointId << endl;
     auto jointPositionInRadian = get_command(name);
-    int degrees = jointPositionInRadian * (180.0 / M_PI); 
-    std::string jointid = "2";
-    if (name.find("joint2") != std::string::npos) {
-      if (joint_2_Position_==degrees) {
-        ss << "Ignoring duplicate command for joint2";
-        continue;
-      }
-      joint_2_Position_=degrees;
-    } else {
-      if (joint_5_Position_==degrees) {
-        ss << "Ignoring duplicate command for joint2";
-        continue;
-      }
-      jointid="5";
-      joint_5_Position_=degrees;
+    int degrees = jointPositionInRadian * (180.0 / M_PI);
+    if (!RRBotSystemPositionOnlyHardware::shouldProcess(jointId, degrees)){
+      continue;
     }
-    std::string temp_message = "<";
-    temp_message = temp_message + std::to_string(degrees) + "," + jointid+">";
-    const char* message = temp_message.c_str();
-    RRBotSystemPositionOnlyHardware::writeToSerialPort(hw_slowdown_, message, strlen(message));
-    ss << temp_message;
-    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
+    std::string degree_in_string = std::to_string(degrees);
+    ss <<"Degree for " <<jointId << " " << degree_in_string << endl;
+    std::string message_to_arduino = "<" + degree_in_string + "," + jointId+">";
+    ss <<"Message for arduino for " <<jointId << " " << message_to_arduino  << endl;
+    const char* message = message_to_arduino.c_str();
+    RRBotSystemPositionOnlyHardware::writeToSerialPort(arduino_serial_port_, message, strlen(message));
+    ss <<"Message sent to arduino for " <<jointId << endl;
   }
+//    RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
+
   return hardware_interface::return_type::OK;
 }
 
@@ -318,7 +338,7 @@ void RRBotSystemPositionOnlyHardware::sendCommandToBot(const std::string& jointN
     const char* message = temp_message.c_str();
 
 
-  RRBotSystemPositionOnlyHardware::writeToSerialPort(hw_slowdown_, message, strlen(message));
+  RRBotSystemPositionOnlyHardware::writeToSerialPort(arduino_serial_port_, message, strlen(message));
 }
 
 }  // namespace ros2_control_demo_example_1

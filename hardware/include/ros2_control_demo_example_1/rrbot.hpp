@@ -69,6 +69,9 @@ int writeToSerialPort(int fd, const char* buffer,
 // Function to close the serial port
 void closeSerialPort(int fd) ;
 
+std::string extractJointNumber(const std::string& input);
+
+bool shouldProcess(std::string jointId, int degree);
 
 private:
   // Parameters for the RRBot simulation
@@ -78,6 +81,8 @@ private:
   int fd;
   int joint_2_Position_;
   int joint_5_Position_;
+  double arduino_serial_port_;
+  std::map<std::string, int> last_joint_command_to_arduino_;
 };
 
 }  // namespace ros2_control_demo_example_1
